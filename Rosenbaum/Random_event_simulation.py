@@ -732,4 +732,331 @@ class Hawkes_process:
         print('lambda_true, k_true, p_true, ',avg_params)
         return avg_params
 
+class Hawkes_process_bivariate:
+    def __init__(self, T_max, lambda_0_1=1, lambda_0_2=1, alpha_11=1, beta_11=1, alpha_12=1, beta_12=1,
+                 alpha_21=1, beta_21=1, alpha_22=1, beta_22=1):
+        """
+        Initialisation du processus de Hawkes bivarié avec noyau exponentiel.
 
+        :param T_max: Temps d'observation maximal
+        :param lambda_0_1: Intensité de base pour le processus 1
+        :param lambda_0_2: Intensité de base pour le processus 2
+        :param alpha_ij: Influence du processus j sur le processus i
+        :param beta_ij: Paramètre de décroissance pour l'influence j sur i
+        """
+        self.T_max = T_max
+        self.lambdas_0 = np.array([lambda_0_1, lambda_0_2])
+        self.alphas = np.array([[alpha_11, alpha_12], [alpha_21, alpha_22]])
+        self.betas = np.array([[beta_11, beta_12], [beta_21, beta_22]])
+
+    def simulate_by_thinning_exponential(self):
+        """
+        Simulation d'un processus de Hawkes bivarié avec noyau exponentiel par la méthode du thinning.
+        """
+        P = [[], []]
+        n = [0, 0]
+        A = np.zeros((2, 2))
+        s = 0
+        last_accepted, last_k = 0, 0
+        while s < self.T_max:
+            M = np.sum(self.lambdas_0) + np.sum(self.alphas * A)
+            u = np.random.uniform()
+            w = - np.log(u) / M
+            new_s = s + w
+            D = np.random.uniform()
+            A = A * np.exp(-self.betas * w) # On met à jour A par rapport au new_s
+            M_prime = np.cumsum(self.lambdas_0) + np.cumsum(np.sum(self.alphas * A, axis=1))
+            if D * M <= M_prime[-1]:
+                k = 0
+                while D * M > M_prime[k]:
+                    k += 1
+                n[k] += 1
+                last_accepted = new_s
+                last_k = k
+                P[k].append(new_s)
+                A[:, k] += 1
+            s = new_s
+        
+        if last_accepted <= self.T_max:
+            return P
+        else:
+            P[last_k].pop()
+            return P
+
+    def init_params(self, times, reg_factor=0):
+        '''
+        Estimation via ML for exponential kernels alpha * exp(-beta * t)
+        '''
+        T_org = times[-1]
+        
+        times = np.array(times)
+        times = times/T_org
+        T = times[-1]
+        
+        def log_likelihood(lambda_, beta_, alpha_):
+            A = [0.0]
+            for i in range(1, len(times)):
+                dt = times[i] - times[i-1]
+                A.append(np.exp(-beta_ * dt) * (A[-1] + 1))
+            A = np.array(A)
+            term1 = np.sum(np.log(lambda_ + alpha_ * A))
+            term2 = lambda_ * T + (alpha_ / beta_) * np.sum(1 - np.exp(-beta_ * (T - np.array(times))))
+            reg_term = reg_factor * alpha_ ** 2
+            return term1 - term2 - reg_term
+        
+        def gradient_log_likelihood(lambda_, beta_, alpha_):
+            n = len(times)
+            A = [0.0]
+            B = [0.0]
+            for i in range(1, n):
+                dt = times[i] - times[i-1]
+                Ai = np.exp(-beta_ * dt) * (A[-1] + 1)
+                A.append(Ai)
+                Bi = np.exp(-beta_ * dt) * (B[-1] - dt * (A[-2] + 1))
+                B.append(Bi)
+            A = np.array(A)
+            B = np.array(B)
+            dL_dlambda = np.sum(1.0 / (lambda_ + alpha_ * A)) - T
+            dL_dalpha = np.sum(A / (lambda_ + alpha_ * A)) - (1.0 / beta_) * np.sum(1 - np.exp(-beta_ * (T - times))) - 2 * reg_factor * alpha_
+            grad_term1_beta = np.sum(alpha_ * B / (lambda_ + alpha_ * A))
+            sum_term = np.sum(1 - np.exp(-beta_ * (T - times)))
+            sum_term2 = np.sum((T - times) * np.exp(-beta_ * (T - times)))
+            grad_term2_beta = -alpha_ / (beta_ ** 2) * sum_term + (alpha_ / beta_) * sum_term2
+            dL_dbeta = grad_term1_beta - grad_term2_beta
+            return np.array([dL_dlambda, dL_dbeta, dL_dalpha])
+
+
+        def objective(params):
+            lambda_, beta_, alpha_ = params
+            return -log_likelihood(lambda_, beta_, alpha_)
+        
+        def grad_objective(params):
+            lambda_, beta_, alpha_ = params
+            return -gradient_log_likelihood(lambda_, beta_, alpha_)
+        
+        n_events = len(times)
+        
+        observed_intensity = n_events / T
+        alpha_init = 0.5
+        beta_init = 1.0
+        lambda_init = observed_intensity * (1 - alpha_init) / beta_init
+        x0 = np.array([lambda_init, beta_init, alpha_init])
+        bounds = Bounds([1e-9, 1e-9, 1e-9], [np.inf, np.inf, np.inf])
+        result = minimize(objective, x0, jac=grad_objective, method='L-BFGS-B', bounds=bounds, options={"disp": False, "ftol": 1e-10, "gtol": 1e-8})
+        lambda_opt, beta_opt, alpha_opt = result.x
+        f_opt = -result.fun
+        lambda_opt = lambda_opt/T_org
+        beta_opt = beta_opt/ T_org
+        alpha_opt = alpha_opt/ T_org
+
+        return alpha_opt, beta_opt, lambda_opt
+
+
+    def exponential_estimation(self):
+        """
+        Estimation des paramètres du processus de Hawkes bivarié avec un noyau exponentiel.
+        """
+        P1, P2 = self.simulate_by_thinning_exponential()
+        alpha_11, beta_11, lambda_1 = self.init_params(P1)
+        print(f"Process 1: alpha_11 = {alpha_11}, beta_11 = {beta_11}, lambda_1 = {lambda_1}")
+        alpha_22, beta_22, lambda_2 = self.init_params(P2)
+        print(f"Process 2: alpha_22 = {alpha_22}, beta_22 = {beta_22}, lambda_2 = {lambda_2}")
+        alpha_21, alpha_12 = np.random.uniform(min(alpha_11, alpha_22), max(alpha_11, alpha_22), 2)
+        beta_21, beta_12 = np.random.uniform(min(beta_11, beta_22), max(beta_11, beta_22), 2)
+
+        T_org = max(P1[-1], P2[-1])
+
+        P1, P2 = np.array(P1) / T_org, np.array(P2) / T_org
+        T = 1.0  # Car les temps sont normalisés
+
+        def log_likelihood(params):
+            lambda_1, lambda_2, alpha_11, beta_11, alpha_12, beta_12, alpha_21, beta_21, alpha_22, beta_22 = params
+            
+            # Calculs des termes récurrents A_ij pour les deux processus
+            A_11, A_12 = [0.0], [0.0]
+            A_21, A_22 = [0.0], [0.0]
+
+            # Calcul des termes de la diagonale
+            for i in range(1, len(P1)):
+                dt = P1[i] - P1[i - 1]
+                A_11.append(np.exp(-beta_11 * dt) * (A_11[-1] + 1))
+
+            for i in range(1, len(P2)):
+                dt = P2[i] - P2[i - 1]
+                A_22.append(np.exp(-beta_22 * dt) * (A_22[-1] + 1))
+            
+            # Calcul des termes croisés
+            k_j = 0
+            for k in range(1, len(P1)):
+                dt = P1[k] - P1[k - 1]
+                # Calcul du reste à charge
+                leftover = 0
+                s = k_j
+                while s < len(P2):
+                    if P2[s] >= P1[k]:
+                        break
+                    elif P2[s] >= P1[k - 1]:
+                        dt_s = P1[k-1] - P2[s]
+                        leftover += np.exp(-beta_12 * dt_s)
+                    s += 1
+                k_j = s
+                A_12.append(np.exp(-beta_12 * dt) * (A_12[-1] + leftover))
+            
+            k_j = 0
+            for k in range(1, len(P2)):
+                dt = P2[k] - P2[k - 1]
+                # Calcul du reste à charge
+                leftover = 0
+                s = k_j
+                while s < len(P1):
+                    if P1[s] >= P2[k]:
+                        break
+                    elif P1[s] >= P2[k - 1]:
+                        dt_s = P2[k-1] - P1[s]
+                        leftover += np.exp(-beta_21 * dt_s)
+                    s += 1
+                k_j = s
+                A_21.append(np.exp(-beta_21 * dt) * (A_21[-1] + leftover))
+
+            # Log-likelihood
+            term1 = np.sum(np.log(lambda_1 + alpha_11 * np.array(A_11) + alpha_12 * np.array(A_12))) + \
+                    np.sum(np.log(lambda_2 + alpha_21 * np.array(A_21) + alpha_22 * np.array(A_22)))
+
+            term2 = lambda_1 * T + lambda_2 * T + \
+                    (alpha_11 / beta_11) * np.sum(1 - np.exp(-beta_11 * (T - P1))) + \
+                    (alpha_12 / beta_12) * np.sum(1 - np.exp(-beta_12 * (T - P2))) + \
+                    (alpha_21 / beta_21) * np.sum(1 - np.exp(-beta_21 * (T - P1))) + \
+                    (alpha_22 / beta_22) * np.sum(1 - np.exp(-beta_22 * (T - P2)))
+
+            return -(term1 - term2)
+
+        # Initialisation des paramètres
+        init_params = np.array([lambda_1, lambda_2, alpha_11, beta_11, alpha_12, beta_12, alpha_21, beta_21, alpha_22, beta_22]) * T_org
+        bounds = Bounds([1e-6] * 10, [np.inf] * 10)
+
+        # Optimisation
+        result = minimize(log_likelihood, init_params, method='L-BFGS-B', bounds=bounds)
+
+        lambda_1_opt, lambda_2_opt, alpha_11_opt, beta_11_opt, alpha_12_opt, beta_12_opt, \
+        alpha_21_opt, beta_21_opt, alpha_22_opt, beta_22_opt = result.x
+
+        # Récupération des paramètres réels
+        lambda_1_opt, lambda_2_opt = lambda_1_opt / T_org, lambda_2_opt / T_org
+        beta_11_opt, beta_12_opt, beta_21_opt, beta_22_opt = beta_11_opt / T_org, beta_12_opt / T_org, beta_21_opt / T_org, beta_22_opt / T_org
+        alpha_11_opt, alpha_12_opt, alpha_21_opt, alpha_22_opt = alpha_11_opt / T_org, alpha_12_opt / T_org, alpha_21_opt / T_org, alpha_22_opt / T_org
+
+        print("Optimal parameters:")
+        print(f"λ1 = {lambda_1_opt}, λ2 = {lambda_2_opt}")
+        print(f"α11 = {alpha_11_opt}, α12 = {alpha_12_opt}, α21 = {alpha_21_opt}, α22 = {alpha_22_opt}")
+        print(f"β11 = {beta_11_opt}, β12 = {beta_12_opt}, β21 = {beta_21_opt}, β22 = {beta_22_opt}")
+
+        def kernel(x, alpha, beta):
+            return alpha * np.exp(-beta * x)
+        
+        x = np.linspace(0, 1, 1000)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x = x, 
+            y = kernel(x, alpha_11_opt, beta_11_opt),
+            mode = 'markers',
+            name = "Estimated Kernel",
+            marker = dict(size = 0.85, color = 'darkred')
+        ))
+        fig.add_trace(go.Scatter(
+            x = x,
+            y = kernel(x, self.alphas[0, 0], self.betas[0, 0]),
+            mode = 'lines',
+            name = "Real Kernel",
+            line = dict(width = 0.85, color = 'black')
+        ))
+        fig.update_layout(
+            title = "Estimated vs real kernel function (1, 1)",
+            xaxis_title = "Time",
+            yaxis_title = "Kernel Function",
+            plot_bgcolor = '#D3D3D3',
+            paper_bgcolor = '#D3D3D3',
+            xaxis = dict(showgrid=True, gridcolor='#808080'),
+            yaxis = dict(showgrid=True, gridcolor='#808080')
+        )
+        fig.show()
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x = x, 
+            y = kernel(x, alpha_22_opt, beta_22_opt),
+            mode = 'markers',
+            name = "Estimated Kernel",
+            marker = dict(size = 0.85, color = 'darkred')
+        ))
+        fig.add_trace(go.Scatter(
+            x = x,
+            y = kernel(x, self.alphas[1, 1], self.betas[1, 1]),
+            mode = 'lines',
+            name = "Real Kernel",
+            line = dict(width = 0.85, color = 'black')
+        ))
+        fig.update_layout(
+            title = "Estimated vs real kernel function (2, 2)",
+            xaxis_title = "Time",
+            yaxis_title = "Kernel Function",
+            plot_bgcolor = '#D3D3D3',
+            paper_bgcolor = '#D3D3D3',
+            xaxis = dict(showgrid=True, gridcolor='#808080'),
+            yaxis = dict(showgrid=True, gridcolor='#808080')
+        )
+        fig.show()
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x = x, 
+            y = kernel(x, alpha_12_opt, beta_12_opt),
+            mode = 'markers',
+            name = "Estimated Kernel",
+            marker = dict(size = 0.85, color = 'darkred')
+        ))
+        fig.add_trace(go.Scatter(
+            x = x,
+            y = kernel(x, self.alphas[0, 1], self.betas[0, 1]),
+            mode = 'lines',
+            name = "Real Kernel",
+            line = dict(width = 0.85, color = 'black')
+        ))
+        fig.update_layout(
+            title = "Estimated vs real kernel function (1, 2)",
+            xaxis_title = "Time",
+            yaxis_title = "Kernel Function",
+            plot_bgcolor = '#D3D3D3',
+            paper_bgcolor = '#D3D3D3',
+            xaxis = dict(showgrid=True, gridcolor='#808080'),
+            yaxis = dict(showgrid=True, gridcolor='#808080')
+        )
+        fig.show()
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x = x, 
+            y = kernel(x, alpha_21_opt, beta_21_opt),
+            mode = 'markers',
+            name = "Estimated Kernel",
+            marker = dict(size = 0.85, color = 'darkred')
+        ))
+        fig.add_trace(go.Scatter(
+            x = x,
+            y = kernel(x, self.alphas[1, 0], self.betas[1, 0]),
+            mode = 'lines',
+            name = "Real Kernel",
+            line = dict(width = 0.85, color = 'black')
+        ))
+        fig.update_layout(
+            title = "Estimated vs real kernel function (2, 1)",
+            xaxis_title = "Time",
+            yaxis_title = "Kernel Function",
+            plot_bgcolor = '#D3D3D3',
+            paper_bgcolor = '#D3D3D3',
+            xaxis = dict(showgrid=True, gridcolor='#808080'),
+            yaxis = dict(showgrid=True, gridcolor='#808080')
+        )
+        fig.show()
+
+        return lambda_1_opt, lambda_2_opt, alpha_11_opt, alpha_12_opt, alpha_21_opt, alpha_22_opt, beta_11_opt, beta_12_opt, beta_21_opt, beta_22_opt
