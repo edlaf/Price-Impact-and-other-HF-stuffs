@@ -165,12 +165,16 @@ baseline_pconst.l = patched_l
 class data_analysis:
     def __init__(self, df):
         self.df_ = df
+        tick = np.min(np.abs(self.df_['bid_px_00']-self.df_['ask_px_00']))
+        self.tick =  np.round(tick, 4)
+        self.df_ = self.df_[np.abs(self.df_['price'].diff(1))<30*tick]
         self.data_hawkes()
+        
         
     def stats_(self):
         tick = np.min(np.abs(self.df_['bid_px_00']-self.df_['ask_px_00']))
         print(' -- Dataset statistics -- \n')
-        
+        self.tick =  np.round(tick, 4)
         print('Tick                                  :', np.round(tick, 4))
         bid_ask = np.mean(np.abs(self.df_['bid_px_00']-self.df_['ask_px_00']))
         print('Average Bid-ask                       :', bid_ask)
@@ -272,7 +276,9 @@ class data_analysis:
         df = self.df_
         df['ts_event'] = pd.to_datetime(df['ts_event'])
         df = df.sort_values('ts_event').reset_index(drop=True)
-        df = df[df['action'] =='T']
+        #df = df[df['action'] =='T']
+        df["mid"] = (df["bid_px_00"]+df["ask_px_00"])/2
+        df = df[df['mid'].diff(1)!=0]
         t0 = df['ts_event'].iloc[0]
         df['time_sec'] = (df['ts_event'] - t0).dt.total_seconds()
 
@@ -289,6 +295,8 @@ class data_analysis:
 
         self.jump_counts_up   = {}
         self.jump_counts_down = {}
+        self.jump_size_up = {}
+        self.jump_size_down = {}
         
         tick = np.min(np.abs(self.df_['bid_px_00']-self.df_['ask_px_00']))
         
@@ -303,6 +311,10 @@ class data_analysis:
                 if current_price-prev_price>0.015:
                     self.p_u +=1
                 increases.append(timestamp)
+                if jump_key in self.jump_size_up:
+                    self.jump_size_up[jump_key].append(row['size'])
+                else:
+                    self.jump_size_up[jump_key] = [row['size']]
                 if jump_key in self.jump_counts_up:
                     self.jump_counts_up[jump_key] += 1
                 else:
@@ -312,6 +324,10 @@ class data_analysis:
                 if current_price-prev_price<0.015:
                     self.p_d +=1
                 decreases.append(timestamp)
+                if jump_key in self.jump_size_down:
+                    self.jump_size_down[jump_key].append(row['size'])
+                else:
+                    self.jump_size_down[jump_key] = [row['size']]
                 if jump_key in self.jump_counts_down:
                     self.jump_counts_down[jump_key] += 1
                 else:
@@ -332,10 +348,23 @@ class data_analysis:
         for k, v in self.jump_counts_up.items():
             new_key = transform_key(k)
             new_jump_counts_up[new_key] = v
+            
+        new_jump_size_down = {}
+        for k, v in self.jump_size_down.items():
+            new_key = transform_key(k)
+            new_jump_size_down[new_key] = v
+        
+        new_jump_size_up = {}
+        for k, v in self.jump_size_up.items():
+            new_key = transform_key(k)
+            new_jump_size_up[new_key] = v
 
         self.jump_counts_down = new_jump_counts_down
         self.jump_counts_up = new_jump_counts_up
-
+        self.jump_size_down = new_jump_size_down
+        self.jump_size_up = new_jump_size_up
+        self.df = df
+        self.df.to_csv("test__")
     
     def visu_arrival(self):
         fig = go.Figure()
