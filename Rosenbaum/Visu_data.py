@@ -167,7 +167,12 @@ class data_analysis:
         self.df_ = df
         tick = np.min(np.abs(self.df_['bid_px_00']-self.df_['ask_px_00']))
         self.tick =  np.round(tick, 4)
-        self.df_ = self.df_[np.abs(self.df_['price'].diff(1))<30*tick]
+        limit__ = 30
+        self.df_ = self.df_[(self.df_["price"] == self.df_["bid_px_00"]) | (self.df_["price"] == self.df_["ask_px_00"])]
+        # self.df_ = self.df_[np.abs(self.df_['price'].diff(1))<limit__*tick]
+        # self.df_ = self.df_[np.abs(self.df_['price'].diff(1))<limit__*tick]
+        # self.df_ = self.df_[np.abs(self.df_['price'].diff(1))<limit__*tick]
+        # self.df_ = self.df_[np.abs(self.df_['price'].diff(1))<limit__*tick]
         self.data_hawkes()
         
         
@@ -219,7 +224,7 @@ class data_analysis:
 
     def visu_price(self):
         df = self.df_
-        df    = df[df['action'] == 'T']
+        #df    = df[df['action'] == 'T']
         time  = pd.to_datetime(df['ts_event'])
         price = df['price']
         fig   = go.Figure()
@@ -524,8 +529,6 @@ class data_analysis:
                 )
             fig.show()
         return events_time, price
-    
-    
     
     def fit_2(self):
         itv = [0, self.increases[-1]]
