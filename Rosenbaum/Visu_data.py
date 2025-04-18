@@ -284,6 +284,7 @@ class data_analysis:
         #df = df[df['action'] =='T']
         df["mid"] = (df["bid_px_00"]+df["ask_px_00"])/2
         df = df[df['mid'].diff(1)!=0]
+        df = df[df["action"] =="T"]
         t0 = df['ts_event'].iloc[0]
         df['time_sec'] = (df['ts_event'] - t0).dt.total_seconds()
 
@@ -463,20 +464,24 @@ class data_analysis:
         
         
         itv = [0, self.increases[-1]]
-        h2 = hk.estimator().set_kernel('pow').set_baseline('loglinear',num_basis=6)
+        h2 = hk.estimator().set_kernel('exp').set_baseline('loglinear',num_basis=1)
         h2.fit(self.increases,itv)
         para = h2.para
+        para = {'mu': np.array([ 0.99400907,  1.29788534, -1.3273801 , -0.52088587, -0.11170238,
+        -1.22207284]), 'k': 0.0418636941097223, 'p': 1.0869497917057913, 'c': 0.00028904571816909985}
         h1 = hk.simulator().set_kernel('pow').set_baseline('loglinear',num_basis=6).set_parameter(para)
         event_plus = h1.simulate(itv)
-        print(h2.para)
+        # print(h2.para)
         
         itv = [0, self.decreases[-1]]
-        h2 = hk.estimator().set_kernel('pow').set_baseline('loglinear',num_basis=6)
+        h2 = hk.estimator().set_kernel('exp').set_baseline('loglinear',num_basis=1)
         h2.fit(self.decreases,itv)
         para = h2.para
+        para = {'mu': np.array([ 0.84163202,  1.5585625 , -1.02747946, -0.20151808,  0.28566816,
+       -1.25722369]), 'k': 0.03507983790540017, 'p': 1.1296021098362607, 'c': 0.00027072335366323623}
         h1 = hk.simulator().set_kernel('pow').set_baseline('loglinear',num_basis=6).set_parameter(para)
         event_minus = h1.simulate(itv)
-        print(h2.para)
+        # print(h2.para)
         
         keys_down = np.array(list(self.jump_counts_down.keys()))
         values_down = np.array(list(self.jump_counts_down.values()))
@@ -522,16 +527,105 @@ class data_analysis:
                     title="Simulated data",
                     xaxis_title="Time",
                     yaxis_title="N(t)",
-                    plot_bgcolor='#D3D3D3',
-                    paper_bgcolor='#D3D3D3',
-                    xaxis=dict(showgrid=True, gridcolor='#808080'),
-                    yaxis=dict(showgrid=True, gridcolor='#808080')
+                    plot_bgcolor='Xhite',
+                    paper_bgcolor='White',
+                    # xaxis=dict(showgrid=True, gridcolor='#808080'),
+                    # yaxis=dict(showgrid=True, gridcolor='#808080')
                 )
             fig.show()
         return events_time, price
     
     def fit_2(self):
+        print(len(self.uncreases))
         itv = [0, self.increases[-1]]
-        h2 = hk.estimator().set_kernel('exp').set_baseline('const')
+        h2 = hk.estimator().set_kernel('pow').set_baseline('const')
         h2.fit(self.increases,itv)
         print(h2.para)
+        
+        
+        
+    def simulate(self, T, alpha_opt_plus, beta_opt_plus, lambda_opt_plus, alpha_opt_minus, beta_opt_minus, lambda_opt_minus, p_0, tick = 0.01, visu = False, show_real_p = False):
+        itv = [0, self.increases[-1]]
+        h2 = hk.estimator().set_kernel('pow').set_baseline('loglinear',num_basis=6)
+        h2.fit(self.increases,itv)
+        para = h2.para
+        h1 = hk.simulator().set_kernel('pow').set_baseline('loglinear',num_basis=6).set_parameter(para)
+        event_plus = h1.simulate(itv)
+        print(h2.para)
+        
+        itv = [0, self.decreases[-1]]
+        h2 = hk.estimator().set_kernel('pow').set_baseline('loglinear',num_basis=6)
+        h2.fit(self.decreases,itv)
+        para = h2.para
+        h1 = hk.simulator().set_kernel('pow').set_baseline('loglinear',num_basis=6).set_parameter(para)
+        event_minus = h1.simulate(itv)
+        print(h2.para)
+        
+        keys_down = np.array(list(self.jump_counts_down.keys()))
+        values_down = np.array(list(self.jump_counts_down.values()))
+        probabilities_down = values_down / values_down.sum()
+        keys_up = np.array(list(self.jump_counts_up.keys()))
+        values_up = np.array(list(self.jump_counts_up.values()))
+        probabilities_up = values_up / values_up.sum()
+        
+        up   = np.random.choice(keys_up, p=probabilities_up, size = len(event_plus))
+        down = np.random.choice(keys_down, p=probabilities_down, size = len(event_minus))
+        up_down     = np.concatenate([up, down])
+        events_time = np.concatenate([event_plus, event_minus])
+        
+        ind = np.argsort(events_time)
+        events_time = events_time[ind]
+
+        price = p_0 + tick*np.cumsum(up_down[ind])
+        if visu:
+            fig = go.Figure()
+            if show_real_p:
+                df   = self.df_
+                df   = df[df['action'] == 'T'].copy()
+                t0   = df.loc[:, 'ts_event'].iloc[0]
+                df.loc[:, 'time_sec'] = (df.loc[:, 'ts_event'] - t0).dt.total_seconds()
+                pri  = df['price']
+                fig  = go.Figure()
+                fig.add_trace(go.Scatter(x=df['time_sec'], y=pri, mode='lines', name="Real Price", line=dict(width = 0.85, color = 'darkred')))
+            fig.add_trace(go.Scatter(x=events_time, y=price, mode='lines', name="Simulated Price", line=dict(width = 0.85, color = 'darkblue')))
+            fig.update_layout(
+                    width = 1800,
+                    height = 1400,
+                    title="Simulated data",
+                    xaxis_title="Time",
+                    yaxis_title="Price",
+                    plot_bgcolor='White',
+                    paper_bgcolor='White',
+                    xaxis=dict(showgrid=True,gridcolor='#808080'),
+                    yaxis=dict(showgrid=True,gridcolor='#808080')
+                )
+            fig.show()
+            fig  = go.Figure()
+            fig.add_trace(go.Scatter(x=np.sort(np.concatenate([self.increases,self.decreases])), y=np.arange(len(np.concatenate([self.increases,self.decreases]))), mode='lines', name="Real data", line=dict(width = 0.85, color = 'darkred')))
+            fig.add_trace(go.Scatter(x=events_time, y=np.arange(len(events_time)), mode='lines', name="Simulated data", line=dict(width = 0.85, color = 'darkblue')))
+            fig.update_layout(
+                    width = 1800,
+                    height = 1400,
+                    title="Simulated data",
+                    xaxis_title="Time",
+                    yaxis_title="N(t)",
+                    plot_bgcolor='White',
+                    paper_bgcolor='White',
+                    xaxis=dict(showgrid=True,gridcolor='#808080'),
+                    yaxis=dict(showgrid=True,gridcolor='#808080')
+                )
+            fig.show()
+        return events_time, price
+    
+    def fitting_best(self, T, alpha_opt_plus, beta_opt_plus, lambda_opt_plus, alpha_opt_minus, beta_opt_minus, lambda_opt_minus, p_0, tick = 0.01, visu = False, show_real_p = False):
+        itv = [0, self.increases[-1]]
+        h2 = hk.estimator().set_kernel('pow').set_baseline('loglinear',num_basis=6)
+        h2.fit(self.increases,itv)
+        para_up = h2.para
+
+
+        itv = [0, self.decreases[-1]]
+        h2 = hk.estimator().set_kernel('pow').set_baseline('loglinear',num_basis=6)
+        h2.fit(self.decreases,itv)
+        para_down = h2.para
+        return para_up, para_down
